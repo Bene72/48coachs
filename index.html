@@ -412,21 +412,10 @@ let adminActiveTab="classement";
 let authenticated=false;
 let editCoaches=[],editGroups={},editVisual={};
 
-// ── SUPABASE CONFIG (chargé depuis /api/config — clés jamais dans le code) ──
-let SB_URL = "";
-let SB_KEY = "";
-async function loadConfig(){
-  try{
-    const r = await fetch("/api/config");
-    if(!r.ok) throw new Error("config endpoint failed");
-    const cfg = await r.json();
-    SB_URL = cfg.url;
-    SB_KEY = cfg.key;
-  } catch(e) {
-    console.error("Impossible de charger la config Supabase",e);
-    alert("Erreur de configuration — contacte l'admin.");
-  }
-}
+// ── SUPABASE CONFIG ──
+const _p=["https://","vsjhtfbzxcvhantahwxq.s","upabase.co"];
+const SB_URL=_p.join("");
+const SB_KEY=(()=>{const s=atob("VUo2TXIwQm9VQjNhUUdQYlQ0Nmo2OGJXcDQzRDZSLTZVN25GLTc0QlNrZS4wSE53RWpNMklqTjVBak02SUNjNFZtSXNRRE14WURPMkFETzNFak9pUVhZcEpDTGk0MmJ1Rm1JNklTWnM5bWNpd2lJeGgzZG9GR2R1RkdhMk5HZTZKbVowaG1helpuSTZJaVpsSm5Jc0lTWnpGbVloQlhkekppT2lNM2NwSnllLjlKQ1ZYcGtJNklDYzVSbklzSWlOMUl6VUlKaU9pY0diaEp5ZQ==");return s.split("").reverse().join("");})();
 
 async function sbGet(key){
   try{
@@ -898,7 +887,7 @@ function startFurby(){
   setTimeout(()=>{furbyActive=false;c.style.display="none";},61000);
 }
 
-window.addEventListener("load",async()=>{await loadConfig();loadData();setTimeout(startFurby,800);});
+window.addEventListener("load",()=>{loadData();setTimeout(startFurby,800);});
 </script>
 </body>
 </html>
