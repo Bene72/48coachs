@@ -145,7 +145,11 @@ textarea.vi-input{resize:vertical;min-height:60px;font-family:'DM Sans',sans-ser
 .player-card-head{display:flex;align-items:center;gap:10px;margin-bottom:4px}
 .player-card-head input{flex:1}
 .player-pts-tag{font-family:'Bebas Neue',sans-serif;font-size:16px;color:#7B5BCE;background:var(--bg3);padding:4px 10px;border-radius:12px;white-space:nowrap}
-.hist-line{font-size:11px;color:var(--muted);padding:2px 0}
+.pts-edit-input{max-width:78px;flex:0 0 78px;text-align:center;font-family:'Bebas Neue',sans-serif;font-size:16px;color:#7B5BCE;font-weight:700}
+.hist-line{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11px;color:var(--muted);padding:3px 0}
+.hist-list{max-height:150px;overflow-y:auto;margin-top:8px;padding-top:6px;border-top:1px dashed var(--border)}
+.hist-undo{background:transparent;border:none;color:var(--muted);cursor:pointer;font-size:13px;padding:2px 7px;border-radius:8px;transition:all .15s;flex-shrink:0}
+.hist-undo:hover{background:rgba(255,138,122,.15);color:#FF8A7A}
 .btn{padding:10px 22px;border-radius:30px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;font-weight:700;font-size:14px;transition:all .2s}
 .btn-gold{background:linear-gradient(135deg,#FFE6B0,#FFB86B);color:#2D2A4A}
 .btn-gold:hover{opacity:.9;transform:translateY(-1px)}
@@ -353,12 +357,32 @@ async function sbGet(key){
   }catch(e){return null}
 }
 async function sbSet(key,value){
-  // upsert : crée la ligne si elle n'existe pas encore, la met à jour sinon
-  await fetch(`${SB_URL}/rest/v1/ul_data?on_conflict=key`,{
-    method:"POST",
-    headers:{"apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY,"Content-Type":"application/json","Prefer":"resolution=merge-duplicates,return=minimal"},
-    body:JSON.stringify({key,value,updated_at:new Date().toISOString()})
-  });
+  // 1) on essaie de METTRE À JOUR une ligne existante pour cette clé
+  try{
+    const patchRes = await fetch(`${SB_URL}/rest/v1/ul_data?key=eq.${key}`,{
+      method:"PATCH",
+      headers:{"apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY,"Content-Type":"application/json","Prefer":"return=representation"},
+      body:JSON.stringify({value,updated_at:new Date().toISOString()})
+    });
+    if(patchRes.ok){
+      const updated = await patchRes.json().catch(()=>[]);
+      if(updated && updated.length) return true; // la ligne existait déjà et a bien été mise à jour
+    }
+    // 2) aucune ligne existante pour cette clé -> on la CRÉE
+    const insertRes = await fetch(`${SB_URL}/rest/v1/ul_data`,{
+      method:"POST",
+      headers:{"apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY,"Content-Type":"application/json","Prefer":"return=minimal"},
+      body:JSON.stringify({key,value,updated_at:new Date().toISOString()})
+    });
+    if(!insertRes.ok){
+      console.warn("sbSet: échec insertion pour",key,insertRes.status,await insertRes.text().catch(()=>""));
+      return false;
+    }
+    return true;
+  }catch(e){
+    console.warn("sbSet: erreur réseau pour",key,e);
+    return false;
+  }
 }
 
 async function loadData(){
@@ -372,13 +396,16 @@ async function loadData(){
   renderAll();
 }
 async function persist(){
-  try{
-    await sbSet("shop_players",players);
-    await sbSet("shop_catalog",catalog);
-    await sbSet("shop_rules",rules);
-    await sbSet("shop_events",events);
-    await sbSet("shop_redemptions",redemptions);
-  }catch(e){console.warn("Supabase save error",e);alert("Erreur de sauvegarde — vérifie ta connexion.");}
+  const labels = {shop_players:"Joueurs", shop_catalog:"Catalogue", shop_rules:"Barème", shop_events:"Animations", shop_redemptions:"Échanges"};
+  const values = {shop_players:players, shop_catalog:catalog, shop_rules:rules, shop_events:events, shop_redemptions:redemptions};
+  const keys = Object.keys(labels);
+  const results = await Promise.all(keys.map(k=>sbSet(k,values[k])));
+  const failed = keys.filter((k,i)=>!results[i]).map(k=>labels[k]);
+  if(failed.length){
+    alert("⚠️ La sauvegarde en ligne a échoué pour : "+failed.join(", ")+".\n\nTes changements restent affichés pour l'instant mais seront perdus si tu quittes la page. Ouvre la console du navigateur (touche F12) pour voir le détail, ou vérifie dans Supabase (Authentication > Policies) que la clé anonyme a bien le droit d'INSERT et pas seulement SELECT/UPDATE sur la table ul_data.");
+    return false;
+  }
+  return true;
 }
 
 // ── NAVIGATION ──
@@ -570,7 +597,7 @@ function adminJoueursHtml(){
     return `<div class="player-card">
       <div class="player-card-head">
         <input class="vi-input" value="${esc(p.name)}" oninput="editPlayers[${idx}].name=this.value">
-        <span class="player-pts-tag">${p.points} pts</span>
+        <input class="vi-input pts-edit-input" type="number" value="${p.points}" title="Points actuels — modifiable directement" oninput="editPlayers[${idx}].points=parseInt(this.value)||0">
         <button class="row-del" onclick="delPlayer('${p.id}')">✕</button>
       </div>
       <div class="quick-pts">${quick}</div>
@@ -583,7 +610,7 @@ function adminJoueursHtml(){
         <input class="vi-input" id="custom-label-${p.id}" placeholder="Motif (ex: bonus fair-play)" style="flex:1">
         <button class="btn btn-ghost btn-sm" onclick="customAddPoints('${p.id}')">Ajouter</button>
       </div>
-      ${(p.history&&p.history.length) ? `<div style="margin-top:8px">${p.history.slice(-4).reverse().map(h=>`<div class="hist-line">${h.delta>0?"+":""}${h.delta} pts — ${esc(h.label)}</div>`).join("")}</div>` : ""}
+      ${(p.history&&p.history.length) ? `<div class="hist-list">${p.history.map((h,hi)=>({h,hi})).slice().reverse().map(({h,hi})=>`<div class="hist-line"><span>${h.delta>0?"+":""}${h.delta} pts — ${esc(h.label)}</span><button class="hist-undo" onclick="undoHistory('${p.id}',${hi})" title="Annuler cette opération">↩</button></div>`).join("")}</div>` : ""}
     </div>`;
   }).join("") || `<div class="empty-state"><div class="ee">👤</div>Ajoute ton premier joueur ci-dessus.</div>`;
   return h;
@@ -628,11 +655,27 @@ function redeemGift(pid){
   if(p.points < c.cost){ toast("Ce joueur n'a pas assez de points pour ce cadeau"); return; }
   if(c.stock!==null && c.stock!==undefined && c.stock<=0){ toast("Ce cadeau est épuisé"); return; }
   if(!confirm(`Confirmer l'échange de "${c.name}" (${c.cost} pts) pour ${p.name} ?`)) return;
+  const redId = uid();
   p.points -= c.cost;
-  p.history = p.history||[]; p.history.push({label:"Échange : "+c.name, delta:-c.cost, date:new Date().toISOString().slice(0,10)});
+  p.history = p.history||[]; p.history.push({label:"Échange : "+c.name, delta:-c.cost, date:new Date().toISOString().slice(0,10), catalogId:c.id, redemptionId:redId});
   if(c.stock!==null && c.stock!==undefined) c.stock = Math.max(0, c.stock-1);
-  editRedemptions.push({id:uid(), playerId:p.id, playerName:p.name, catalogId:c.id, catalogName:c.name, cost:c.cost, date:new Date().toISOString().slice(0,10)});
+  editRedemptions.push({id:redId, playerId:p.id, playerName:p.name, catalogId:c.id, catalogName:c.name, cost:c.cost, date:new Date().toISOString().slice(0,10)});
   toast(`🎁 ${c.name} échangé pour ${p.name} !`);
+  renderAdminContent();
+}
+function undoHistory(pid,hi){
+  const p = editPlayers.find(x=>x.id===pid);
+  if(!p || !p.history || !p.history[hi]) return;
+  const entry = p.history[hi];
+  if(!confirm(`Annuler "${entry.label}" (${entry.delta>0?"+":""}${entry.delta} pts) pour ${p.name} ?`)) return;
+  p.points -= entry.delta;
+  if(entry.delta>0) p.totalEarned = Math.max(0,(p.totalEarned||0)-entry.delta);
+  if(entry.catalogId){
+    const c = editCatalog.find(x=>x.id===entry.catalogId);
+    if(c && c.stock!==null && c.stock!==undefined) c.stock += 1;
+    if(entry.redemptionId) editRedemptions = editRedemptions.filter(r=>r.id!==entry.redemptionId);
+  }
+  p.history.splice(hi,1);
   renderAdminContent();
 }
 
@@ -711,10 +754,13 @@ async function saveAll(){
   rules = editRules;
   events = editEvents;
   redemptions = editRedemptions;
-  await persist();
   renderAll();
-  closeModal();
-  toast("💾 Sauvegardé !");
+  const ok = await persist();
+  if(ok){
+    closeModal();
+    toast("💾 Sauvegardé !");
+  }
+  // si ça a échoué, la modale reste ouverte et l'alerte a déjà expliqué le souci
 }
 function exportBackup(){
   const data = {players:editPlayers, catalog:editCatalog, rules:editRules, events:editEvents, redemptions:editRedemptions, exportedAt:new Date().toISOString()};
